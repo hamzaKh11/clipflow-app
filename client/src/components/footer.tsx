@@ -65,6 +65,15 @@ export function Footer() {
                   FAQ
                 </button>
               </li>
+              <li>
+                <Link
+                  href="/blog"
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  data-testid="link-blog"
+                >
+                  Blog
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -81,14 +90,47 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="border-t pt-8 text-center text-sm text-muted-foreground">
-          <p className="flex items-center justify-center gap-2">
-            Made with <Heart className="w-4 h-4 text-red-500 fill-current" />{" "}
-            for content creators worldwide
-          </p>
-          <p className="mt-2">
-            © {new Date().getFullYear()} ClipFlow. All rights reserved.
-          </p>
+        <div className="border-t pt-8">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 text-sm">
+            <Link
+              href="/privacy-policy"
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="link-privacy"
+            >
+              Privacy Policy
+            </Link>
+            <Link
+              href="/terms-of-service"
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="link-terms"
+            >
+              Terms of Service
+            </Link>
+            <Link
+              href="/about-us"
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="link-about"
+            >
+              About Us
+            </Link>
+            <Link
+              href="/contact-us"
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              data-testid="link-contact"
+            >
+              Contact Us
+            </Link>
+          </div>
+
+          <div className="text-center text-sm text-muted-foreground">
+            <p className="flex items-center justify-center gap-2">
+              Made with <Heart className="w-4 h-4 text-red-500 fill-current" />{" "}
+              for content creators worldwide
+            </p>
+            <p className="mt-2">
+              © {new Date().getFullYear()} ClipFlow. All rights reserved.
+            </p>
+          </div>
         </div>
       </div>
     </footer>

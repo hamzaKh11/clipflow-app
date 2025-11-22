@@ -7,7 +7,7 @@ const steps = [
     icon: LinkIcon,
     title: "Paste YouTube URL",
     description:
-      "Copy any YouTube video link and paste it into ReelCutter. We'll load the video instantly.",
+      "Copy any YouTube video link and paste it into ClipFlow. We'll load the video instantly.",
   },
   {
     number: "2",

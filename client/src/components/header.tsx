@@ -59,7 +59,7 @@ export function Header() {
           <Button
             size="sm"
             className="hidden md:inline-flex"
-            onClick={() => scrollToSection("editor")}
+            onClick={() => scrollToSection("video-editor")}
             data-testid="button-try-now"
           >
             Try Free Now

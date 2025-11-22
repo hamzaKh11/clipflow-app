@@ -7,9 +7,9 @@ import {
 
 const faqs = [
   {
-    question: "Is ReelCutter really free?",
+    question: "Is ClipFlow really free?",
     answer:
-      "Yes! ReelCutter is 100% free with no hidden fees, no subscriptions, and no limits on how many clips you can create. We believe in making video editing accessible to everyone.",
+      "Yes! ClipFlow is 100% free with no hidden fees, no subscriptions, and no limits on how many clips you can create. We believe in making video editing accessible to everyone.",
   },
   {
     question: "Do I need to create an account?",
@@ -24,12 +24,12 @@ const faqs = [
   {
     question: "How long can my clips be?",
     answer:
-      "You can create clips of any length from the source YouTube video. Whether you need a 10-second teaser or a 5-minute segment, ReelCutter has you covered.",
+      "You can create clips of any length from the source YouTube video. Whether you need a 10-second teaser or a 5-minute segment, ClipFlow has you covered.",
   },
   {
     question: "Which aspect ratios are supported?",
     answer:
-      "ReelCutter supports 9:16 (perfect for Reels and TikTok), 1:1 (Instagram posts), 16:9 (YouTube), and 4:5 (Facebook). Choose the format that fits your platform.",
+      "ClipFlow supports 9:16 (perfect for Reels and TikTok), 1:1 (Instagram posts), 16:9 (YouTube), and 4:5 (Facebook). Choose the format that fits your platform.",
   },
   {
     question: "Can I download copyrighted content?",
