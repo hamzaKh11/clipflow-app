@@ -95,7 +95,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (Optimized for Quality and Speed)
+// ASYNC WORKER FUNCTION 
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -106,7 +106,6 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
         const endSec = parseTimestamp(endTime);
         const durationSec = endSec - startSec;
 
-        // CRITICAL CHECK: Ensure duration is positive inside the worker
         if (durationSec <= 0) {
              throw new Error(`Invalid duration calculated: ${durationSec} seconds.`);
         }
@@ -125,7 +124,6 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (CRF 20 for Higher Quality with 'ultrafast' for speed)
         const args = [
             ...commonArgs,
             "-i",
@@ -141,11 +139,11 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (No change here - it is fast)
+            // VIDEO SPEED & QUALITY OPTIMIZATION
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", // Keep the speed for the long job
+            "ultrafast", // Keep fetch fast (5-second completion)
             "-crf",
             "20", // High Quality Target 
             "-g", "30",
@@ -153,9 +151,9 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             "-threads", "0",
             "-pix_fmt", "yuv420p",
             
-            // ✅ AUDIO OPTIMIZATION 
+            // AUDIO OPTIMIZATION 
             "-c:a",
-            "copy", // Instant and 100% quality audio copy
+            "copy", 
             
             // BROWSER OPTIMIZATION
             "-movflags",
@@ -200,7 +198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO (GET /api/video-info) - Get highest available quality
+  // 1. VIDEO INFO (GET /api/video-info)
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -229,7 +227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
         "--get-url",
         "-f",
-        "bestvideo[height>=1080]+bestaudio/best", // Get 1080p or higher video and best audio
+        "bestvideo[height>=1080]+bestaudio/best", 
         "--no-playlist",
         "--no-warnings",
         url,
@@ -303,17 +301,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings) - UPDATED PRESET
+  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings) - FIXED FOR SPEED AND RELIABILITY
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
-      // FIX: Robust check for filename
+      
       if (!filename || typeof filename !== 'string') {
         return res.status(400).json({ message: "Missing or invalid filename in request body." });
       }
       
       const inputPath = path.join(DOWNLOADS_DIR, filename);
 
+      // FIX 2: Source File Not Found Error (404)
+      // The original file (hq_*.mp4) must exist to be cropped again.
       if (!existsSync(inputPath))
         return res.status(404).json({
           message: "Source file not found. Try fetching the clip again.",
@@ -322,49 +322,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const outputFilename = `final_${Date.now()}.mp4`;
       const processedPath = path.join(DOWNLOADS_DIR, outputFilename);
 
-      // Use system ffmpeg (already installed in Replit)
       const command = "ffmpeg";
 
       let args: string[] = [];
-
-      // Add common input arguments
       args.push("-i", inputPath);
 
       console.log(`[CROP] Processing ${aspectRatio} crop...`);
       const startProcessing = Date.now();
       
-      // Target 1080p width for high quality social media content
       const TARGET_RESOLUTION_WIDTH = 1920; 
 
       if (aspectRatio !== "16:9") {
         // Cropped Output 
         let targetW_expr = "";
-        if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`; // Calculate width based on height for 9:16
-        else if (aspectRatio === "1:1") targetW_expr = "ih"; // Width = Height for 1:1
+        if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`; 
+        else if (aspectRatio === "1:1") targetW_expr = "ih"; 
 
         const posFactor = (parseInt(position as any) || 50) / 100;
-        // Combined Cropping and Scaling filter chain (best practice)
+        // Combined Cropping and Scaling filter chain
         const filterChain = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0,scale=${TARGET_RESOLUTION_WIDTH}:-2`;
 
 
         args.push(
           "-vf",
-          filterChain, // Apply the combined crop and scale filter
-          // Industry-standard encoding for social media
+          filterChain, 
+          // Encoding parameters
           "-c:v",
           "libx264",
+          // FIX 1: Revert to ultrafast and add tuning for speed
           "-preset",
-          "faster", // 🌟 NEW: Faster preset for the filter-heavy crop process
+          "ultrafast", // 🚀 Max speed preset
           "-crf",
-          "20", // High Quality Target 
+          "20", 
+             "-tune",
+             "fastdecode", // 🌟 NEW: Optimization for fast client playback
           "-profile:v",
           "high",
           "-level",
           "4.2",
           "-pix_fmt",
-          "yuv420p", // Maximum compatibility
+          "yuv420p", 
           "-threads",
-          "0", // Use all available CPU cores
+          "0", 
           "-movflags",
           "+faststart",
           // Keep audio pristine
@@ -383,8 +382,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.download(processedPath, outputFilename, () => {
         try {
-          fs.unlink(inputPath).catch(() => {}); // Clean up the fetched clip
-          fs.unlink(processedPath).catch(() => {}); // Clean up the final clip after download
+          // FIX 2: Only delete the final, processed clip (processedPath), 
+          // NOT the input clip (inputPath) which the user may want to re-crop.
+          fs.unlink(processedPath).catch(() => {}); 
         } catch {}
       });
     } catch (error: any) {
