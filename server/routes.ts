@@ -5,320 +5,399 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { existsSync } from "fs";
 import express from "express";
+import crypto from "crypto"; // ✅ NEW: Import for unique job IDs
 
 const isWindows = process.platform === "win32";
 // Updated User Agent to mimic a real browser
 const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// ----------------------------------------------------------------------
+// ✅ NEW: ASYNC JOB MANAGEMENT STORE
+// ----------------------------------------------------------------------
+
+type JobStatus = {
+  status: 'Processing' | 'Completed' | 'Failed';
+  message: string;
+  result?: { videoUrl: string, filename: string }; // Custom result object
+  error?: string;
+};
+
+// In-Memory Job Store (resets on pm2 restart)
+const jobs: Record<string, JobStatus> = {}; 
+
+// ----------------------------------------------------------------------
+// EXISTING HELPER FUNCTIONS
+// ----------------------------------------------------------------------
 
 async function runCommand(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    const currentDir = process.cwd();
-    const pathKey = isWindows ? "Path" : "PATH";
-    env[pathKey] = `${currentDir}${path.delimiter}${env[pathKey] || ""}`;
-    env["PYTHONIOENCODING"] = "utf-8";
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    const currentDir = process.cwd();
+    const pathKey = isWindows ? "Path" : "PATH";
+    env[pathKey] = `${currentDir}${path.delimiter}${env[pathKey] || ""}`;
+    env["PYTHONIOENCODING"] = "utf-8";
 
-    const proc = spawn(command, args, { shell: false, env });
+    const proc = spawn(command, args, { shell: false, env });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = "";
+    let stderr = "";
 
-    proc.stdout.on("data", (data) => (stdout += data.toString()));
-    proc.stderr.on("data", (data) => (stderr += data.toString()));
+    proc.stdout.on("data", (data) => (stdout += data.toString()));
+    proc.stderr.on("data", (data) => (stderr += data.toString()));
 
-    proc.on("close", (code) => {
-      if (code === 0) resolve(stdout);
-      else {
-        if (!stdout && stderr.toLowerCase().includes("error")) {
-          console.error(`[Command Failed] ${stderr}`);
-          reject(new Error(stderr));
-        } else {
-          resolve(stdout);
-        }
-      }
-    });
+    proc.on("close", (code) => {
+      if (code === 0) resolve(stdout);
+      else {
+        if (!stdout && stderr.toLowerCase().includes("error")) {
+          console.error(`[Command Failed] ${stderr}`);
+          reject(new Error(stderr));
+        } else {
+          resolve(stdout);
+        }
+      }
+    });
 
-    proc.on("error", (err) => reject(err));
-  });
+    proc.on("error", (err) => reject(err));
+  });
 }
 
 function parseTimestamp(timeStr: string): number {
-  const parts = timeStr.split(":").map(Number);
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return parts[0] || 0;
+  const parts = timeStr.split(":").map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
 }
 
 function validateYouTubeUrl(urlString: string): boolean {
-  try {
-    const url = new URL(urlString);
-    return [
-      "www.youtube.com",
-      "youtube.com",
-      "youtu.be",
-      "m.youtube.com",
-    ].includes(url.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
+  try {
+    const url = new URL(urlString);
+    return [
+      "www.youtube.com",
+      "youtube.com",
+      "youtu.be",
+      "m.youtube.com",
+    ].includes(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 const DOWNLOADS_DIR = path.join(process.cwd(), "downloads");
 
 interface VideoCache {
-  title: string;
-  thumbnail: string;
-  duration: number;
-  channel: string;
-  videoUrl: string;
-  audioUrl: string;
-  timestamp: number;
+  title: string;
+  thumbnail: string;
+  duration: number;
+  channel: string;
+  videoUrl: string;
+  audioUrl: string;
+  timestamp: number;
 }
 const videoCache = new Map<string, VideoCache>();
 
+// ----------------------------------------------------------------------
+// ✅ NEW: ASYNC WORKER FUNCTION (Contains all the long-running logic)
+// ----------------------------------------------------------------------
+
+async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
+    jobs[jobId] = { status: 'Processing', message: 'Starting video download and processing...' };
+    
+    try {
+        const startSec = parseTimestamp(startTime);
+        const endSec = parseTimestamp(endTime);
+        const durationSec = endSec - startSec;
+
+        const filename = `hq_${jobId}.mp4`; // Use jobId for unique filename
+        const outputTemplate = path.join(DOWNLOADS_DIR, filename);
+
+        jobs[jobId].message = `Downloading ${durationSec}s clip...`;
+
+        // Use system ffmpeg
+        const command = "ffmpeg";
+
+        const commonArgs = [
+            "-user_agent",
+            USER_AGENT,
+            "-headers",
+            `User-Agent: ${USER_AGENT}`,
+        ];
+
+        // Complete FFmpeg Arguments (Copied from original fetch-segment)
+        const args = [
+            ...commonArgs,
+            "-i",
+            cached.videoUrl,
+            ...(cached.videoUrl !== cached.audioUrl
+                ? [...commonArgs, "-i", cached.audioUrl]
+                : []),
+            "-ss",
+            `${startSec}`,
+            "-t",
+            `${durationSec}`,
+            ...(cached.videoUrl !== cached.audioUrl
+                ? ["-map", "0:v:0", "-map", "1:a:0"]
+                : ["-map", "0"]),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-g",
+            "30",
+            "-x264-params",
+            "scenecut=0",
+            "-threads",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-af",
+            "aresample=async=1",
+            "-movflags",
+            "+faststart",
+            "-y",
+            outputTemplate,
+        ];
+
+        console.log(`[FETCH] Processing ${durationSec}s clip for job ${jobId}...`);
+        const startProcessing = Date.now();
+        await runCommand(command, args);
+        console.log(`[FETCH] Job ${jobId} Completed in ${Date.now() - startProcessing}ms`);
+
+        if (!existsSync(outputTemplate))
+            throw new Error("Download failed (File not found)");
+            
+        // Finalize the job status
+        jobs[jobId] = { 
+            status: 'Completed', 
+            message: 'Processing complete.', 
+            result: { videoUrl: `/downloads/${filename}`, filename }
+        };
+
+    } catch (error: any) {
+        console.error(`Fetch Error for job ${jobId}:`, error);
+        jobs[jobId] = { 
+            status: 'Failed', 
+            message: 'Video processing failed. Try a shorter segment.', 
+            error: error.message 
+        };
+    }
+}
+
+// ----------------------------------------------------------------------
+// EXISTING ROUTE REGISTRATION
+// ----------------------------------------------------------------------
+
 export async function registerRoutes(app: Express): Promise<Server> {
-  if (!existsSync(DOWNLOADS_DIR)) {
-    await fs.mkdir(DOWNLOADS_DIR, { recursive: true }).catch(console.error);
-  }
+  if (!existsSync(DOWNLOADS_DIR)) {
+    await fs.mkdir(DOWNLOADS_DIR, { recursive: true }).catch(console.error);
+  }
 
-  app.use("/downloads", express.static(DOWNLOADS_DIR));
+  app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO
-  app.get("/api/video-info", async (req, res) => {
-    try {
-      const url = req.query.url as string;
-      if (!url || !validateYouTubeUrl(url))
-        return res.status(400).json({ message: "Invalid URL" });
+  // 1. VIDEO INFO (GET /api/video-info - Remains the same)
+  app.get("/api/video-info", async (req, res) => {
+    try {
+      const url = req.query.url as string;
+      if (!url || !validateYouTubeUrl(url))
+        return res.status(400).json({ message: "Invalid URL" });
 
-      const cached = videoCache.get(url);
-      if (cached && Date.now() - cached.timestamp < 1000 * 60 * 30) {
-        return res.json({
-          title: cached.title,
-          thumbnail: cached.thumbnail,
-          duration: cached.duration,
-          channel: cached.channel,
-        });
-      }
+      const cached = videoCache.get(url);
+      if (cached && Date.now() - cached.timestamp < 1000 * 60 * 30) {
+        return res.json({
+          title: cached.title,
+          thumbnail: cached.thumbnail,
+          duration: cached.duration,
+          channel: cached.channel,
+        });
+      }
 
-      // Use system yt-dlp (already installed in Replit)
-      const command = "yt-dlp";
+      // Use system yt-dlp 
+      const command = "yt-dlp";
 
-      const args = [
-        "--cookies",
-        "cookies.txt",
-        "--encoding",
-        "utf-8",
-        "--print",
-        "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
-        "--get-url",
-        "-f",
-        "bestvideo+bestaudio/best",
-        "--no-playlist",
-        "--no-warnings",
-        url,
-      ];
+      const args = [
+        "--cookies",
+        "cookies.txt",
+        "--encoding",
+        "utf-8",
+        "--print",
+        "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
+        "--get-url",
+        "-f",
+        "bestvideo+bestaudio/best",
+        "--no-playlist",
+        "--no-warnings",
+        url,
+      ];
 
-      const stdout = await runCommand(command, args);
-      const lines = stdout.trim().split("\n");
-      const meta = lines[0].split("|||");
+      const stdout = await runCommand(command, args);
+      const lines = stdout.trim().split("\n");
+      const meta = lines[0].split("|||");
 
-      const title = meta[0] ? meta[0].trim() : "Unknown Video";
-      const thumbnail = meta[1] || "";
-      const duration = parseFloat(meta[2]) || 0;
-      const channel = meta[3] || "Unknown Channel";
-      const videoUrl = lines[1] || "";
-      const audioUrl = lines[2] || videoUrl;
+      const title = meta[0] ? meta[0].trim() : "Unknown Video";
+      const thumbnail = meta[1] || "";
+      const duration = parseFloat(meta[2]) || 0;
+      const channel = meta[3] || "Unknown Channel";
+      const videoUrl = lines[1] || "";
+      const audioUrl = lines[2] || videoUrl;
 
-      videoCache.set(url, {
-        title,
-        thumbnail,
-        duration,
-        channel,
-        videoUrl,
-        audioUrl,
-        timestamp: Date.now(),
-      });
-      res.json({ title, thumbnail, duration, channel });
-    } catch (error: any) {
-      console.error("Info Error:", error.message);
-      res.status(500).json({ message: "Failed to fetch info" });
-    }
-  });
+      videoCache.set(url, {
+        title,
+        thumbnail,
+        duration,
+        channel,
+        videoUrl,
+        audioUrl,
+        timestamp: Date.now(),
+      });
+      res.json({ title, thumbnail, duration, channel });
+    } catch (error: any) {
+      console.error("Info Error:", error.message);
+      res.status(500).json({ message: "Failed to fetch info" });
+    }
+  });
 
-  // 2. FETCH SEGMENT (Zero-Encoding Download)
-  app.post("/api/fetch-segment", async (req, res) => {
-    try {
-      const { url, startTime, endTime } = req.body;
-      const cached = videoCache.get(url);
-      if (!cached)
-        return res
-          .status(400)
-          .json({ message: "Session expired. Reload video." });
+  // 2. FETCH SEGMENT (POST /api/fetch-segment - Now ASYNC JOB STARTER)
+  app.post("/api/fetch-segment", (req, res) => { // Removed 'async'
+    try {
+      const { url, startTime, endTime } = req.body;
+      const cached = videoCache.get(url);
+      if (!cached)
+        return res
+          .status(400)
+          .json({ message: "Session expired. Reload video." });
 
-      const startSec = parseTimestamp(startTime);
-      const endSec = parseTimestamp(endTime);
-      const durationSec = endSec - startSec;
+      if (!url || !startTime || !endTime) {
+          return res.status(400).json({ message: "Missing required parameters." });
+      }
 
-      const filename = `hq_${Date.now()}.mp4`;
-      const outputTemplate = path.join(DOWNLOADS_DIR, filename);
+      const jobId = crypto.randomBytes(16).toString('hex');
+      
+      // 1. Start the long-running job in the background (DO NOT use await)
+      startProcessingJob(jobId, cached, startTime, endTime); 
 
-      // Use system ffmpeg (already installed in Replit)
-      const command = "ffmpeg";
+      // 2. Respond IMMEDIATELY (202 Accepted) to bypass Cloudflare 100s timeout
+      return res.status(202).json({ 
+          jobId, 
+          message: "Video processing started in background. Check job-status." 
+      });
 
-      const commonArgs = [
-        "-user_agent",
-        USER_AGENT,
-        "-headers",
-        `User-Agent: ${USER_AGENT}`,
-      ];
+    } catch (error: any) {
+      console.error("Fetch Route Error:", error);
+      res.status(500).json({ message: "Failed to start processing job" }); 
+    }
+  });
 
-      // FIX: Proper A/V sync with synchronized trimming
-      // Load inputs first, THEN apply trim to keep streams in sync
-      const args = [
-        ...commonArgs,
-        "-i",
-        cached.videoUrl,
-        ...(cached.videoUrl !== cached.audioUrl
-          ? [...commonArgs, "-i", cached.audioUrl]
-          : []),
-        // Apply trim AFTER inputs are loaded (fixes A/V sync)
-        "-ss",
-        `${startSec}`,
-        "-t",
-        `${durationSec}`,
-        ...(cached.videoUrl !== cached.audioUrl
-          ? ["-map", "0:v:0", "-map", "1:a:0"]
-          : ["-map", "0"]),
-        // Re-encode with perfect frame/audio alignment
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast", // Better quality than ultrafast, industry standard for video editing
-        "-crf",
-        "20", // High quality (20-23 is excellent range, lower=better)
-        "-g",
-        "30", // Keyframe every second at 30fps
-        "-x264-params",
-        "scenecut=0", // Consistent keyframes
-        "-threads",
-        "0", // Use all available CPU cores
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-ar",
-        "44100",
-        "-ac",
-        "2", // Force stereo for compatibility
-        // Sync audio to video timing
-        "-af",
-        "aresample=async=1",
-        // Browser playback optimization
-        "-movflags",
-        "+faststart",
-        "-y",
-        outputTemplate,
-      ];
+  // 3. PROCESS CROP (POST /api/process-crop - Remains the same)
+  app.post("/api/process-crop", async (req, res) => {
+    try {
+      const { filename, aspectRatio, position } = req.body;
+      const inputPath = path.join(DOWNLOADS_DIR, filename);
 
-      console.log(`[FETCH] Processing ${durationSec}s clip...`);
-      const startProcessing = Date.now();
-      await runCommand(command, args);
-      console.log(`[FETCH] Completed in ${Date.now() - startProcessing}ms`);
+      if (!existsSync(inputPath))
+        return res.status(404).json({
+          message: "Source file not found. Try fetching the clip again.",
+        });
 
-      if (!existsSync(outputTemplate))
-        throw new Error("Download failed (File not found)");
-      res.json({ success: true, videoUrl: `/downloads/${filename}`, filename });
-    } catch (error: any) {
-      console.error("Fetch Error:", error);
-      res.status(500).json({ message: "Fetch failed" });
-    }
-  });
+      const outputFilename = `final_${Date.now()}.mp4`;
+      const processedPath = path.join(DOWNLOADS_DIR, outputFilename);
 
-  // 3. PROCESS CROP (Refactored to prevent crashes and maximize CPU speed)
-  app.post("/api/process-crop", async (req, res) => {
-    try {
-      const { filename, aspectRatio, position } = req.body;
-      const inputPath = path.join(DOWNLOADS_DIR, filename);
+      // Use system ffmpeg (already installed in Replit)
+      const command = "ffmpeg";
 
-      if (!existsSync(inputPath))
-        return res.status(404).json({
-          message: "Source file not found. Try fetching the clip again.",
-        });
+      let args: string[] = [];
 
-      const outputFilename = `final_${Date.now()}.mp4`;
-      const processedPath = path.join(DOWNLOADS_DIR, outputFilename);
+      // Add common input arguments
+      args.push("-i", inputPath);
 
-      // Use system ffmpeg (already installed in Replit)
-      const command = "ffmpeg";
+      console.log(`[CROP] Processing ${aspectRatio} crop...`);
+      const startProcessing = Date.now();
 
-      let args: string[] = [];
+      if (aspectRatio !== "16:9") {
+        // Cropped Output - Optimized for quality and speed
+        let targetW_expr = "";
+        if (aspectRatio === "9:16") targetW_expr = "ih*9/16";
+        else if (aspectRatio === "1:1") targetW_expr = "ih";
 
-      // Add common input arguments
-      args.push("-i", inputPath);
+        const posFactor = (parseInt(position) || 50) / 100;
+        const cropFilter = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0`;
 
-      console.log(`[CROP] Processing ${aspectRatio} crop...`);
-      const startProcessing = Date.now();
+        args.push(
+          "-vf",
+          cropFilter,
+          // Industry-standard encoding for social media
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast", // Proven best speed/quality balance (industry standard)
+          "-crf",
+          "19", // Excellent quality range (17-20 is visually lossless)
+          "-profile:v",
+          "high",
+          "-level",
+          "4.2",
+          "-pix_fmt",
+          "yuv420p", // Maximum compatibility
+          "-threads",
+          "0", // Use all available CPU cores
+          "-movflags",
+          "+faststart",
+          // Keep audio pristine
+          "-c:a",
+          "copy",
+          "-y",
+          processedPath
+        );
+      } else {
+        // 16:9 Output - Just copy streams (instant)
+        args.push("-c", "copy", "-movflags", "+faststart", "-y", processedPath);
+      }
 
-      if (aspectRatio !== "16:9") {
-        // Cropped Output - Optimized for quality and speed
-        let targetW_expr = "";
-        if (aspectRatio === "9:16") targetW_expr = "ih*9/16";
-        else if (aspectRatio === "1:1") targetW_expr = "ih";
+      await runCommand(command, args);
+      console.log(`[CROP] Completed in ${Date.now() - startProcessing}ms`);
 
-        const posFactor = (parseInt(position) || 50) / 100;
-        const cropFilter = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0`;
+      if (!existsSync(processedPath))
+        throw new Error("Processing failed: Output file missing.");
 
-        args.push(
-          "-vf",
-          cropFilter,
-          // Industry-standard encoding for social media
-          "-c:v",
-          "libx264",
-          "-preset",
-          "veryfast", // Proven best speed/quality balance (industry standard)
-          "-crf",
-          "19", // Excellent quality range (17-20 is visually lossless)
-          "-profile:v",
-          "high",
-          "-level",
-          "4.2",
-          "-pix_fmt",
-          "yuv420p", // Maximum compatibility
-          "-threads",
-          "0", // Use all available CPU cores
-          "-movflags",
-          "+faststart",
-          // Keep audio pristine
-          "-c:a",
-          "copy",
-          "-y",
-          processedPath
-        );
-      } else {
-        // 16:9 Output - Just copy streams (instant)
-        args.push("-c", "copy", "-movflags", "+faststart", "-y", processedPath);
-      }
+      res.download(processedPath, outputFilename, () => {
+        try {
+          fs.unlink(processedPath).catch(() => {});
+        } catch {}
+      });
+    } catch (error: any) {
+      console.error("Process Crop Error:", error);
+      res.status(500).json({ message: "Processing failed" });
+    }
+  });
 
-      await runCommand(command, args);
-      console.log(`[CROP] Completed in ${Date.now() - startProcessing}ms`);
 
-      if (!existsSync(processedPath))
-        throw new Error("Processing failed: Output file missing.");
+  // 4. ✅ NEW: JOB STATUS CHECK (GET /api/job-status - Polling Endpoint)
+  app.get("/api/job-status", (req, res) => {
+    const jobId = req.query.id as string;
 
-      res.download(processedPath, outputFilename, () => {
-        try {
-          fs.unlink(processedPath).catch(() => {});
-        } catch {}
-      });
-    } catch (error: any) {
-      console.error("Process Crop Error:", error);
-      res.status(500).json({ message: "Processing failed" });
-    }
-  });
+    if (!jobId) {
+        return res.status(400).json({ message: "Missing job ID." });
+    }
+    
+    const job = jobs[jobId];
 
-  const httpServer = createServer(app);
-  return httpServer;
+    if (!job) {
+        return res.status(404).json({ message: "Job not found or expired." });
+    }
+
+    return res.json(job);
+  });
+
+
+  const httpServer = createServer(app);
+  return httpServer;
 }
