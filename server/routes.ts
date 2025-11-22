@@ -61,24 +61,24 @@ async function runCommand(command: string, args: string[]): Promise<string> {
 }
 
 function parseTimestamp(timeStr: string): number {
-  const parts = timeStr.split(":").map(Number);
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-  if (parts.length === 2) return parts[0] * 60 + parts[1];
-  return parts[0] || 0;
+  const parts = timeStr.split(":").map(Number);
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
 }
 
 function validateYouTubeUrl(urlString: string): boolean {
-  try {
-    const url = new URL(urlString);
-    return [
-      "www.youtube.com",
-      "youtube.com",
-      "youtu.be",
-      "m.youtube.com",
-    ].includes(url.hostname.toLowerCase());
-  } catch {
-    return false;
-  }
+  try {
+    const url = new URL(urlString);
+    return [
+      "www.youtube.com",
+      "youtube.com",
+      "youtu.be",
+      "m.youtube.com",
+    ].includes(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 const DOWNLOADS_DIR = path.join(process.cwd(), "downloads");
@@ -95,7 +95,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (FIXED TIMING LOGIC)
+// ASYNC WORKER FUNCTION (CRITICAL FIX: SEEKING LOGIC)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -124,16 +124,16 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // FIX 1: Accurate trimming and timestamp preservation.
+        // FIX 1: RESTORE STABLE SEEKING
+        // We only use -ss and -t before -i for fast, keyframe-aware seeking.
         const args = [
-            // 🌟 CRITICAL FIX: Seek BEFORE input for speed AND use copyts for accuracy
-            "-ss",
+            "-ss", 
             `${startSec}`,
             "-t",
             `${durationSec}`,
-            "-avoid_negative_ts",
-            "make_zero", // Ensure no negative timestamps when cutting
-            "-copyts", // Copy original timestamps (best for accurate cuts on streaming)
+            
+            // CONFLICTING FLAGS REMOVED: -copyts and -avoid_negative_ts are removed 
+            // to stop the 7-second freeze and cropping misalignment.
             
             ...commonArgs,
             "-i",
@@ -205,7 +205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO 
+  // 1. VIDEO INFO (GET /api/video-info)
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -355,7 +355,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Encoding parameters
           "-c:v",
           "libx264",
-          // FIX 2: Max speed optimization (reverting to ultrafast/fastdecode combo)
+          // Max speed combination
           "-preset",
           "ultrafast", 
           "-crf",
