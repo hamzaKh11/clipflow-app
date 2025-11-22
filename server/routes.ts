@@ -8,6 +8,7 @@ import express from "express";
 import crypto from "crypto"; 
 
 const isWindows = process.platform === "win32";
+// Updated User Agent to mimic a real browser
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -22,6 +23,7 @@ type JobStatus = {
   error?: string;
 };
 
+// In-Memory Job Store (resets on pm2 restart)
 const jobs: Record<string, JobStatus> = {}; 
 
 // ----------------------------------------------------------------------
@@ -95,7 +97,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (Optimized for Speed and Quality)
+// ASYNC WORKER FUNCTION (Optimized for Quality and Speed)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -125,7 +127,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (Optimized and Conflict-Free)
+        // Complete FFmpeg Arguments (CRF 20 for Higher Quality)
         const args = [
             ...commonArgs,
             "-i",
@@ -141,22 +143,21 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION
+            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (CRF 20 for Quality)
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", 
+            "ultrafast", // Keep speed, but increase quality target
             "-crf",
-            "23", 
+            "20", // 🌟 Higher Quality Target (Visually lossless range)
             "-g", "30",
             "-x264-params", "scenecut=0",
             "-threads", "0",
             "-pix_fmt", "yuv420p",
             
-            // ✅ AUDIO OPTIMIZATION (FIXED)
+            // ✅ AUDIO OPTIMIZATION 
             "-c:a",
             "copy", // Instant and 100% quality audio copy
-            // ❌ Removed the conflicting filter: "-af", "aresample=async=1", 
             
             // BROWSER OPTIMIZATION
             "-movflags",
@@ -263,7 +264,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER)
+  // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER) 
   app.post("/api/fetch-segment", (req, res) => { // Removed 'async'
     try {
       const { url, startTime, endTime } = req.body;
@@ -352,7 +353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "-preset",
           "ultrafast", // 🚀 Max speed preset
           "-crf",
-          "23", // 👍 Excellent quality/speed trade-off 
+          "20", // 🌟 Higher Quality Target 
           "-profile:v",
           "high",
           "-level",
@@ -363,7 +364,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "0", // Use all available CPU cores
           "-movflags",
           "+faststart",
-          // Keep audio pristine (FIXED)
+          // Keep audio pristine
           "-c:a",
           "copy", 
           "-y",
@@ -376,9 +377,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await runCommand(command, args);
       console.log(`[CROP] Completed in ${Date.now() - startProcessing}ms`);
-
-      if (!existsSync(processedPath))
-        throw new Error("Processing failed: Output file missing.");
 
       res.download(processedPath, outputFilename, () => {
         try {
