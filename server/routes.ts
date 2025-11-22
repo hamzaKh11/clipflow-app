@@ -5,14 +5,14 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { existsSync } from "fs";
 import express from "express";
-import crypto from "crypto"; 
+import crypto from "crypto"; // ✅ NECESSARY for unique job IDs in async system
 
 const isWindows = process.platform === "win32";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // ----------------------------------------------------------------------
-// ASYNC JOB MANAGEMENT STORE
+// ASYNC JOB MANAGEMENT STORE (RESTORED)
 // ----------------------------------------------------------------------
 
 type JobStatus = {
@@ -139,7 +139,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // VIDEO SPEED & QUALITY OPTIMIZATION
+            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (This is the fast part)
             "-c:v",
             "libx264",
             "-preset",
@@ -151,9 +151,9 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             "-threads", "0",
             "-pix_fmt", "yuv420p",
             
-            // AUDIO OPTIMIZATION 
+            // ✅ AUDIO OPTIMIZATION 
             "-c:a",
-            "copy", 
+            "copy", // Instant and 100% quality audio copy
             
             // BROWSER OPTIMIZATION
             "-movflags",
@@ -227,7 +227,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
         "--get-url",
         "-f",
-        "bestvideo[height>=1080]+bestaudio/best", 
+        "bestvideo[height>=1080]+bestaudio/best", // Get 1080p or higher video and best audio
         "--no-playlist",
         "--no-warnings",
         url,
@@ -261,7 +261,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER) 
-  app.post("/api/fetch-segment", (req, res) => { 
+  app.post("/api/fetch-segment", (req, res) => { // Removed 'async' from declaration
     try {
       const { url, startTime, endTime } = req.body;
       const cached = videoCache.get(url);
@@ -301,7 +301,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings) - FIXED FOR SPEED AND RELIABILITY
+  // 3. PROCESS CROP (POST /api/process-crop - Optimized for MAX SPEED)
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
@@ -313,7 +313,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const inputPath = path.join(DOWNLOADS_DIR, filename);
 
       // FIX 2: Source File Not Found Error (404)
-      // The original file (hq_*.mp4) must exist to be cropped again.
       if (!existsSync(inputPath))
         return res.status(404).json({
           message: "Source file not found. Try fetching the clip again.",
@@ -330,6 +329,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CROP] Processing ${aspectRatio} crop...`);
       const startProcessing = Date.now();
       
+      // Target 1080p width for high quality social media content
       const TARGET_RESOLUTION_WIDTH = 1920; 
 
       if (aspectRatio !== "16:9") {
@@ -349,13 +349,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Encoding parameters
           "-c:v",
           "libx264",
-          // FIX 1: Revert to ultrafast and add tuning for speed
+          // FIX 1: Max speed combination to fight throttling
           "-preset",
-          "ultrafast", // 🚀 Max speed preset
+          "ultrafast", // 🚀 Max speed preset to stabilize time
           "-crf",
           "20", 
              "-tune",
-             "fastdecode", // 🌟 NEW: Optimization for fast client playback
+             "fastdecode", // 🌟 Optimization for faster client playback/decoding
           "-profile:v",
           "high",
           "-level",
