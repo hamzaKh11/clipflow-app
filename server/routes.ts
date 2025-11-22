@@ -127,7 +127,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (CRF 20 for Higher Quality)
+        // Complete FFmpeg Arguments (CRF 20 for Higher Quality with 'veryfast' preset for better efficiency)
         const args = [
             ...commonArgs,
             "-i",
@@ -143,13 +143,13 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (CRF 20 for Quality)
+            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (CRF 20 + veryfast)
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", // Keep speed, but increase quality target
+            "veryfast", // 🌟 Optimized preset for better compression efficiency
             "-crf",
-            "20", // 🌟 Higher Quality Target (Visually lossless range)
+            "20", // Higher Quality Target 
             "-g", "30",
             "-x264-params", "scenecut=0",
             "-threads", "0",
@@ -351,7 +351,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "-c:v",
           "libx264",
           "-preset",
-          "ultrafast", // 🚀 Max speed preset
+          "veryfast", // 🌟 Optimized preset
           "-crf",
           "20", // 🌟 Higher Quality Target 
           "-profile:v",
