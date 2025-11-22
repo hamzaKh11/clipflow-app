@@ -35,6 +35,12 @@ const ASPECT_RATIOS = [
   { value: "16:9", label: "YouTube", Icon: Monitor, ratio: 16 / 9 },
 ] as const;
 
+// -----------------------------------------------------------
+// ✅ ASYNC JOB STATUS MANAGEMENT
+// -----------------------------------------------------------
+type JobStatus = "Idle" | "Starting" | "Processing" | "Completed" | "Failed";
+const POLLING_INTERVAL = 3000; // Check every 3 seconds
+
 export function VideoEditor() {
   const [url, setUrl] = useState("");
   const [startTime, setStartTime] = useState("00:00:00");
@@ -43,6 +49,9 @@ export function VideoEditor() {
     "9:16"
   );
   const [shouldFetchInfo, setShouldFetchInfo] = useState(false);
+
+  const [jobId, setJobId] = useState<string | null>(null); // New: Stores the ID of the background job
+  const [jobStatus, setJobStatus] = useState<JobStatus>("Idle"); // New: Tracks job state
 
   const [fetchedVideo, setFetchedVideo] = useState<{
     url: string;
@@ -66,6 +75,7 @@ export function VideoEditor() {
     }
   }, [fetchedVideo]);
 
+  // Query to fetch video metadata (Info)
   const {
     data: videoInfo,
     isLoading: isLoadingInfo,
@@ -82,38 +92,98 @@ export function VideoEditor() {
     },
   });
 
+  // Mutation to START the background job
   const fetchMutation = useMutation({
     mutationFn: async () => {
       setFetchedVideo(null);
+      setJobStatus("Starting"); // Set status to Starting
+      setJobId(null); // Clear old job ID
+
       const response = await fetch("/api/fetch-segment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, startTime, endTime }),
       });
-      if (!response.ok) throw new Error("Fetch failed");
+
+      // Check for 202 Accepted status from the asynchronous backend
+      if (response.status !== 202) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ message: "Unknown error" }));
+        throw new Error(`Failed to start job: ${errorData.message}`);
+      }
       return response.json();
     },
     onSuccess: (data) => {
-      setFetchedVideo({ url: data.videoUrl, filename: data.filename });
-      setTimeout(
-        () =>
-          document
-            .getElementById("visual-editor")
-            ?.scrollIntoView({ behavior: "smooth" }),
-        100
-      );
+      // Save the Job ID and start the polling process
+      setJobId(data.jobId);
+      setJobStatus("Processing");
     },
-    onError: (error: Error) =>
+    onError: (error: Error) => {
+      setJobStatus("Failed");
       toast({
-        title: "Error",
+        title: "Error Starting Job",
         description: error.message,
         variant: "destructive",
-      }),
+      });
+    },
   });
+
+  // ✅ NEW: POLLING EFFECT to check job status
+  useEffect(() => {
+    if (jobStatus !== "Processing" || !jobId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/job-status?id=${jobId}`);
+        if (!response.ok) throw new Error("Could not check job status.");
+
+        const job = await response.json();
+        setJobStatus(job.status as JobStatus);
+
+        if (job.status === "Completed") {
+          // Job finished successfully
+          clearInterval(interval);
+          setFetchedVideo({
+            url: job.result.videoUrl,
+            filename: job.result.filename,
+          });
+          toast({
+            title: "Success",
+            description: "Clip is ready for editing!",
+          });
+
+          // Scroll down to the editor view
+          setTimeout(
+            () =>
+              document
+                .getElementById("visual-editor")
+                ?.scrollIntoView({ behavior: "smooth" }),
+            100
+          );
+        } else if (job.status === "Failed") {
+          // Job failed
+          clearInterval(interval);
+          toast({
+            title: "Processing Failed",
+            description:
+              job.error || "An unknown error occurred during video processing.",
+            variant: "destructive",
+          });
+        }
+      } catch (error) {
+        console.error("Polling error:", error);
+      }
+    }, POLLING_INTERVAL);
+
+    // Cleanup function to stop polling when the component unmounts or status changes
+    return () => clearInterval(interval);
+  }, [jobId, jobStatus, toast]); // Re-run effect only when jobId or status changes
 
   const processMutation = useMutation({
     mutationFn: async () => {
       if (!fetchedVideo) throw new Error("No video fetched");
+      // This part now executes AFTER the async fetch is Completed and fetchedVideo is set.
       const response = await fetch("/api/process-crop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -146,9 +216,11 @@ export function VideoEditor() {
     if (!url) return;
     setShouldFetchInfo(true);
     setFetchedVideo(null);
+    setJobId(null);
+    setJobStatus("Idle");
   };
 
-  // --- OPTIMIZED DRAG LOGIC (requestAnimationFrame) ---
+  // --- OPTIMIZED DRAG LOGIC (No change) ---
   const handleDragMove = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
       if (!isDragging || !containerRef.current) return;
@@ -307,6 +379,7 @@ export function VideoEditor() {
                     setStartTime(secondsToTime(v[0]));
                     setEndTime(secondsToTime(v[1]));
                     setFetchedVideo(null);
+                    setJobStatus("Idle"); // Reset job status on trim change
                   }}
                   className="py-2"
                 />
@@ -320,16 +393,24 @@ export function VideoEditor() {
                       onChange={(e) => {
                         const value = e.target.value;
                         // Allow typing in HH:MM:SS format
-                        if (/^(\d{0,2}):?(\d{0,2}):?(\d{0,2})$/.test(value) || value === "") {
+                        if (
+                          /^(\d{0,2}):?(\d{0,2}):?(\d{0,2})$/.test(value) ||
+                          value === ""
+                        ) {
                           setStartTime(value);
                           setFetchedVideo(null);
+                          setJobStatus("Idle"); // Reset job status on trim change
                         }
                       }}
                       onBlur={(e) => {
                         // Validate and format on blur
                         const value = e.target.value;
                         const seconds = timeToSeconds(value);
-                        if (!isNaN(seconds) && seconds >= 0 && seconds < videoInfo.duration) {
+                        if (
+                          !isNaN(seconds) &&
+                          seconds >= 0 &&
+                          seconds < videoInfo.duration
+                        ) {
                           const endSeconds = timeToSeconds(endTime);
                           if (seconds < endSeconds) {
                             setStartTime(secondsToTime(seconds));
@@ -354,24 +435,36 @@ export function VideoEditor() {
                       onChange={(e) => {
                         const value = e.target.value;
                         // Allow typing in HH:MM:SS format
-                        if (/^(\d{0,2}):?(\d{0,2}):?(\d{0,2})$/.test(value) || value === "") {
+                        if (
+                          /^(\d{0,2}):?(\d{0,2}):?(\d{0,2})$/.test(value) ||
+                          value === ""
+                        ) {
                           setEndTime(value);
                           setFetchedVideo(null);
+                          setJobStatus("Idle"); // Reset job status on trim change
                         }
                       }}
                       onBlur={(e) => {
                         // Validate and format on blur
                         const value = e.target.value;
                         const seconds = timeToSeconds(value);
-                        if (!isNaN(seconds) && seconds > 0 && seconds <= videoInfo.duration) {
+                        if (
+                          !isNaN(seconds) &&
+                          seconds > 0 &&
+                          seconds <= videoInfo.duration
+                        ) {
                           const startSeconds = timeToSeconds(startTime);
                           if (seconds > startSeconds) {
                             setEndTime(secondsToTime(seconds));
                           } else {
-                            setEndTime(secondsToTime(Math.min(30, videoInfo.duration)));
+                            setEndTime(
+                              secondsToTime(Math.min(30, videoInfo.duration))
+                            );
                           }
                         } else {
-                          setEndTime(secondsToTime(Math.min(30, videoInfo.duration)));
+                          setEndTime(
+                            secondsToTime(Math.min(30, videoInfo.duration))
+                          );
                         }
                       }}
                       placeholder="00:00:00"
@@ -414,18 +507,23 @@ export function VideoEditor() {
                 </div>
               </div>
 
+              {/* ✅ UPDATED BUTTON LOGIC TO HANDLE ASYNC JOB STATUS */}
               {!fetchedVideo && (
                 <div className="space-y-3">
                   <Button
                     onClick={() => fetchMutation.mutate()}
-                    disabled={fetchMutation.isPending}
+                    disabled={
+                      jobStatus === "Processing" || jobStatus === "Starting"
+                    }
                     className="w-full h-11 font-medium shadow-lg"
                     data-testid="button-prepare-clip"
                   >
-                    {fetchMutation.isPending ? (
+                    {jobStatus === "Processing" || jobStatus === "Starting" ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />{" "}
-                        Optimizing Clip...
+                        {jobStatus === "Starting"
+                          ? "Starting Job..."
+                          : "Optimizing Clip..."}
                       </>
                     ) : (
                       <>
@@ -433,9 +531,15 @@ export function VideoEditor() {
                       </>
                     )}
                   </Button>
-                  {fetchMutation.isPending && (
+                  {(jobStatus === "Processing" || jobStatus === "Starting") && (
                     <div className="text-xs text-center text-muted-foreground animate-pulse">
-                      Using smart encoding • No quality loss • Lightning fast ⚡
+                      Processing in background to avoid timeouts...
+                    </div>
+                  )}
+                  {jobStatus === "Failed" && (
+                    <div className="text-sm text-center text-destructive flex items-center justify-center gap-1">
+                      <AlertCircle className="w-4 h-4" /> Processing Failed. Try
+                      a shorter segment.
                     </div>
                   )}
                 </div>
@@ -583,22 +687,25 @@ export function VideoEditor() {
                       <Monitor
                         className={cn(
                           "w-8 h-8 text-muted-foreground/40",
-                          fetchMutation.isPending && "text-primary"
+                          (jobStatus === "Processing" ||
+                            jobStatus === "Starting") &&
+                            "text-primary"
                         )}
                       />
                     </div>
-                    {fetchMutation.isPending && (
+                    {(jobStatus === "Processing" ||
+                      jobStatus === "Starting") && (
                       <div className="absolute inset-0 -m-1.5 border-2 border-primary/20 border-t-primary rounded-full animate-spin w-[calc(100%+0.75rem)] h-[calc(100%+0.75rem)]"></div>
                     )}
                   </div>
                   <h3 className="text-lg font-semibold text-muted-foreground">
-                    {fetchMutation.isPending
+                    {jobStatus === "Processing" || jobStatus === "Starting"
                       ? "Preparing Clip..."
                       : "Visual Editor"}
                   </h3>
                   <p className="text-sm text-muted-foreground/60 max-w-xs mt-2">
-                    {fetchMutation.isPending
-                      ? "Streaming high-quality video data..."
+                    {jobStatus === "Processing" || jobStatus === "Starting"
+                      ? "Streaming high-quality video data in the background..."
                       : "Select your time range and click 'Prepare for Editing' to enable the visual cropper."}
                   </p>
                 </div>
