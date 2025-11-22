@@ -124,16 +124,12 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // FIX 1: RESTORE STABLE SEEKING
-        // We only use -ss and -t before -i for fast, keyframe-aware seeking.
+        // FIX 1: Stable Seeking
+        // We use -ss and -t as input options for the fastest *keyframe* seek.
+        // We MUST re-encode (libx264) to ensure frame-accuracy and proper A/V sync on the cut.
         const args = [
-            "-ss", 
+            "-ss", // 1. Fast seek (before input)
             `${startSec}`,
-            "-t",
-            `${durationSec}`,
-            
-            // CONFLICTING FLAGS REMOVED: -copyts and -avoid_negative_ts are removed 
-            // to stop the 7-second freeze and cropping misalignment.
             
             ...commonArgs,
             "-i",
@@ -142,6 +138,10 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? [...commonArgs, "-i", cached.audioUrl]
                 : []),
                 
+            // 2. Set duration (output option)
+            "-t",
+            `${durationSec}`, 
+            
             ...(cached.videoUrl !== cached.audioUrl
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
@@ -344,6 +344,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`; 
         else if (aspectRatio === "1:1") targetW_expr = "ih"; 
 
+        // Fix 2: The client position is scaled from 0-100. The backend logic is fine, 
+        // the alignment error was caused by the input seeking error. 
         const posFactor = (parseInt(position as any) || 50) / 100;
         // Combined Cropping and Scaling filter chain
         const filterChain = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0,scale=${TARGET_RESOLUTION_WIDTH}:-2`;
