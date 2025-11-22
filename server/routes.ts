@@ -97,7 +97,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (Contains all the long-running logic)
+// ASYNC WORKER FUNCTION (Optimized for Speed and Quality)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -107,6 +107,11 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
         const startSec = parseTimestamp(startTime);
         const endSec = parseTimestamp(endTime);
         const durationSec = endSec - startSec;
+
+        // CRITICAL CHECK: Ensure duration is positive inside the worker
+        if (durationSec <= 0) {
+             throw new Error(`Invalid duration calculated: ${durationSec} seconds.`);
+        }
 
         const filename = `hq_${jobId}.mp4`; // Use jobId for unique filename
         const outputTemplate = path.join(DOWNLOADS_DIR, filename);
@@ -123,7 +128,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (Now optimized for SPEED and QUALITY)
+        // Complete FFmpeg Arguments (Optimized for SPEED and Quality: ultrafast/CRF 23/Audio Copy)
         const args = [
             ...commonArgs,
             "-i",
@@ -139,13 +144,13 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ SPEED & QUALITY OPTIMIZATION START
+            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", // 🚀 Max speed preset
+            "ultrafast", // Max speed preset
             "-crf",
-            "23", // 👍 Excellent quality/speed trade-off (industry best practice)
+            "23", // Excellent quality/speed trade-off (industry best practice)
             // Existing video settings
             "-g", "30",
             "-x264-params", "scenecut=0",
@@ -154,11 +159,11 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             
             // ✅ AUDIO OPTIMIZATION
             "-c:a",
-            "copy", // ⚡ Instant and 100% quality audio copy
+            "copy", // Instant and 100% quality audio copy
             "-af",
             "aresample=async=1", // Still include this for time-sync safety
             
-            // ✅ BROWSER OPTIMIZATION
+            // BROWSER OPTIMIZATION
             "-movflags",
             "+faststart",
             "-y",
@@ -184,7 +189,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
         console.error(`Fetch Error for job ${jobId}:`, error);
         jobs[jobId] = { 
             status: 'Failed', 
-            message: 'Video processing failed. Try a shorter segment.', 
+            message: `Video processing failed: ${error.message.split('\n')[0]}.`, 
             error: error.message 
         };
     }
@@ -201,7 +206,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO (GET /api/video-info - Remains the same)
+  // 1. VIDEO INFO (GET /api/video-info)
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -277,6 +282,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ message: "Missing required parameters." });
       }
 
+      // CRITICAL: Server-side validation of time
+      const startSec = parseTimestamp(startTime);
+      const endSec = parseTimestamp(endTime);
+      
+      if (endSec <= startSec) {
+          return res.status(400).json({ 
+              message: "End time must be greater than start time. Duration is 0 or negative." 
+          });
+      }
+
       const jobId = crypto.randomBytes(16).toString('hex');
       
       // 1. Start the long-running job in the background (DO NOT use await)
@@ -294,11 +309,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 3. PROCESS CROP (POST /api/process-crop - Remains the same)
+  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings)
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
-      // FIX: Ensure filename is always a string.
+      // FIX: Robust check for filename
       if (!filename || typeof filename !== 'string') {
         return res.status(400).json({ message: "Missing or invalid filename in request body." });
       }

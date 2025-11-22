@@ -36,7 +36,7 @@ const ASPECT_RATIOS = [
 ] as const;
 
 // -----------------------------------------------------------
-// ✅ ASYNC JOB STATUS MANAGEMENT
+// ASYNC JOB STATUS MANAGEMENT
 // -----------------------------------------------------------
 type JobStatus = "Idle" | "Starting" | "Processing" | "Completed" | "Failed";
 const POLLING_INTERVAL = 3000; // Check every 3 seconds
@@ -50,8 +50,8 @@ export function VideoEditor() {
   );
   const [shouldFetchInfo, setShouldFetchInfo] = useState(false);
 
-  const [jobId, setJobId] = useState<string | null>(null); // New: Stores the ID of the background job
-  const [jobStatus, setJobStatus] = useState<JobStatus>("Idle"); // New: Tracks job state
+  const [jobId, setJobId] = useState<string | null>(null); // Stores the ID of the background job
+  const [jobStatus, setJobStatus] = useState<JobStatus>("Idle"); // Tracks job state
 
   const [fetchedVideo, setFetchedVideo] = useState<{
     url: string;
@@ -92,12 +92,20 @@ export function VideoEditor() {
     },
   });
 
-  // Mutation to START the background job
+  // Mutation to START the background job with client-side validation
   const fetchMutation = useMutation({
     mutationFn: async () => {
+      // ✅ CRITICAL FRONTEND VALIDATION
+      const startSeconds = timeToSeconds(startTime);
+      const endSeconds = timeToSeconds(endTime);
+
+      if (endSeconds <= startSeconds) {
+        throw new Error("End time must be greater than start time.");
+      }
+
       setFetchedVideo(null);
-      setJobStatus("Starting"); // Set status to Starting
-      setJobId(null); // Clear old job ID
+      setJobStatus("Starting");
+      setJobId(null);
 
       const response = await fetch("/api/fetch-segment", {
         method: "POST",
@@ -110,7 +118,7 @@ export function VideoEditor() {
         const errorData = await response
           .json()
           .catch(() => ({ message: "Unknown error" }));
-        throw new Error(`Failed to start job: ${errorData.message}`);
+        throw new Error(`Server failed to start job: ${errorData.message}`);
       }
       return response.json();
     },
@@ -129,7 +137,7 @@ export function VideoEditor() {
     },
   });
 
-  // ✅ NEW: POLLING EFFECT to check job status
+  // ✅ POLLING EFFECT to check job status
   useEffect(() => {
     if (jobStatus !== "Processing" || !jobId) return;
 
@@ -139,9 +147,10 @@ export function VideoEditor() {
         if (!response.ok) throw new Error("Could not check job status.");
 
         const job = await response.json();
-        setJobStatus(job.status as JobStatus);
+        const serverStatus = job.status as JobStatus;
+        setJobStatus(serverStatus);
 
-        if (job.status === "Completed") {
+        if (serverStatus === "Completed") {
           // Job finished successfully
           clearInterval(interval);
           setFetchedVideo({
@@ -161,13 +170,14 @@ export function VideoEditor() {
                 ?.scrollIntoView({ behavior: "smooth" }),
             100
           );
-        } else if (job.status === "Failed") {
+        } else if (serverStatus === "Failed") {
           // Job failed
           clearInterval(interval);
           toast({
             title: "Processing Failed",
             description:
-              job.error || "An unknown error occurred during video processing.",
+              job.message ||
+              "An unknown error occurred during video processing.",
             variant: "destructive",
           });
         }
@@ -178,12 +188,11 @@ export function VideoEditor() {
 
     // Cleanup function to stop polling when the component unmounts or status changes
     return () => clearInterval(interval);
-  }, [jobId, jobStatus, toast]); // Re-run effect only when jobId or status changes
+  }, [jobId, jobStatus, toast]);
 
   const processMutation = useMutation({
     mutationFn: async () => {
       if (!fetchedVideo) throw new Error("No video fetched");
-      // This part now executes AFTER the async fetch is Completed and fetchedVideo is set.
       const response = await fetch("/api/process-crop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -220,12 +229,11 @@ export function VideoEditor() {
     setJobStatus("Idle");
   };
 
-  // --- OPTIMIZED DRAG LOGIC (No change) ---
+  // --- OPTIMIZED DRAG LOGIC ---
   const handleDragMove = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
       if (!isDragging || !containerRef.current) return;
 
-      // Prevent layout thrashing by using animation frame
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
 
       requestRef.current = requestAnimationFrame(() => {
@@ -507,7 +515,7 @@ export function VideoEditor() {
                 </div>
               </div>
 
-              {/* ✅ UPDATED BUTTON LOGIC TO HANDLE ASYNC JOB STATUS */}
+              {/* UPDATED BUTTON LOGIC TO HANDLE ASYNC JOB STATUS */}
               {!fetchedVideo && (
                 <div className="space-y-3">
                   <Button
@@ -538,8 +546,8 @@ export function VideoEditor() {
                   )}
                   {jobStatus === "Failed" && (
                     <div className="text-sm text-center text-destructive flex items-center justify-center gap-1">
-                      <AlertCircle className="w-4 h-4" /> Processing Failed. Try
-                      a shorter segment.
+                      <AlertCircle className="w-4 h-4" /> Processing Failed.
+                      Check times and try again.
                     </div>
                   )}
                 </div>
