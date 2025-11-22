@@ -5,14 +5,14 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { existsSync } from "fs";
 import express from "express";
-import crypto from "crypto"; // ✅ NECESSARY for unique job IDs in async system
+import crypto from "crypto"; 
 
 const isWindows = process.platform === "win32";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // ----------------------------------------------------------------------
-// ASYNC JOB MANAGEMENT STORE (RESTORED)
+// ASYNC JOB MANAGEMENT STORE
 // ----------------------------------------------------------------------
 
 type JobStatus = {
@@ -95,7 +95,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION 
+// ASYNC WORKER FUNCTION (FIXED TIMING LOGIC)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -113,7 +113,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
         const filename = `hq_${jobId}.mp4`; 
         const outputTemplate = path.join(DOWNLOADS_DIR, filename);
 
-        jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed)`;
+        jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed and accurate trimming)`;
 
         const command = "ffmpeg";
 
@@ -124,34 +124,41 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
+        // FIX 1: Accurate trimming and timestamp preservation.
         const args = [
+            // 🌟 CRITICAL FIX: Seek BEFORE input for speed AND use copyts for accuracy
+            "-ss",
+            `${startSec}`,
+            "-t",
+            `${durationSec}`,
+            "-avoid_negative_ts",
+            "make_zero", // Ensure no negative timestamps when cutting
+            "-copyts", // Copy original timestamps (best for accurate cuts on streaming)
+            
             ...commonArgs,
             "-i",
             cached.videoUrl,
             ...(cached.videoUrl !== cached.audioUrl
                 ? [...commonArgs, "-i", cached.audioUrl]
                 : []),
-            "-ss",
-            `${startSec}`,
-            "-t",
-            `${durationSec}`,
+                
             ...(cached.videoUrl !== cached.audioUrl
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (This is the fast part)
+            // VIDEO SPEED & QUALITY OPTIMIZATION 
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", // Keep fetch fast (5-second completion)
+            "ultrafast", 
             "-crf",
-            "20", // High Quality Target 
+            "20", 
             "-g", "30",
             "-x264-params", "scenecut=0",
             "-threads", "0",
             "-pix_fmt", "yuv420p",
             
-            // ✅ AUDIO OPTIMIZATION 
+            // AUDIO OPTIMIZATION 
             "-c:a",
             "copy", // Instant and 100% quality audio copy
             
@@ -198,7 +205,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO (GET /api/video-info)
+  // 1. VIDEO INFO 
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -227,7 +234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
         "--get-url",
         "-f",
-        "bestvideo[height>=1080]+bestaudio/best", // Get 1080p or higher video and best audio
+        "bestvideo[height>=1080]+bestaudio/best", 
         "--no-playlist",
         "--no-warnings",
         url,
@@ -261,7 +268,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER) 
-  app.post("/api/fetch-segment", (req, res) => { // Removed 'async' from declaration
+  app.post("/api/fetch-segment", (req, res) => { 
     try {
       const { url, startTime, endTime } = req.body;
       const cached = videoCache.get(url);
@@ -312,7 +319,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const inputPath = path.join(DOWNLOADS_DIR, filename);
 
-      // FIX 2: Source File Not Found Error (404)
+      // Source File Not Found Error (404) fix is preserved
       if (!existsSync(inputPath))
         return res.status(404).json({
           message: "Source file not found. Try fetching the clip again.",
@@ -329,7 +336,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CROP] Processing ${aspectRatio} crop...`);
       const startProcessing = Date.now();
       
-      // Target 1080p width for high quality social media content
       const TARGET_RESOLUTION_WIDTH = 1920; 
 
       if (aspectRatio !== "16:9") {
@@ -349,13 +355,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           // Encoding parameters
           "-c:v",
           "libx264",
-          // FIX 1: Max speed combination to fight throttling
+          // FIX 2: Max speed optimization (reverting to ultrafast/fastdecode combo)
           "-preset",
-          "ultrafast", // 🚀 Max speed preset to stabilize time
+          "ultrafast", 
           "-crf",
           "20", 
              "-tune",
-             "fastdecode", // 🌟 Optimization for faster client playback/decoding
+             "fastdecode", 
           "-profile:v",
           "high",
           "-level",
@@ -382,8 +388,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.download(processedPath, outputFilename, () => {
         try {
-          // FIX 2: Only delete the final, processed clip (processedPath), 
-          // NOT the input clip (inputPath) which the user may want to re-crop.
+          // Only delete the final, processed clip after download
           fs.unlink(processedPath).catch(() => {}); 
         } catch {}
       });
