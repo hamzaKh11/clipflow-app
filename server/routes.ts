@@ -125,7 +125,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (Reverted to ultrafast for speed, but high CRF for quality)
+        // Complete FFmpeg Arguments (CRF 20 for Higher Quality with 'ultrafast' for speed)
         const args = [
             ...commonArgs,
             "-i",
@@ -141,11 +141,11 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION
+            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (No change here - it is fast)
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", // 🚀 Max speed preset to counter 2 min duration
+            "ultrafast", // Keep the speed for the long job
             "-crf",
             "20", // High Quality Target 
             "-g", "30",
@@ -200,7 +200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO (GET /api/video-info) - UPDATED yt-dlp FORMAT FILTER
+  // 1. VIDEO INFO (GET /api/video-info) - Get highest available quality
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -229,7 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
         "--get-url",
         "-f",
-        "bestvideo[height>=1080]+bestaudio/best", // 🌟 Get 1080p or higher video and best audio
+        "bestvideo[height>=1080]+bestaudio/best", // Get 1080p or higher video and best audio
         "--no-playlist",
         "--no-warnings",
         url,
@@ -303,7 +303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings) - UPDATED SCALE
+  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings) - UPDATED PRESET
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
@@ -333,8 +333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`[CROP] Processing ${aspectRatio} crop...`);
       const startProcessing = Date.now();
       
-      // We force a high output resolution (1080p width or 4K if hardware allows, but 1080p is safer)
-      // If the input is 4K, this scale filter will preserve it at max quality.
+      // Target 1080p width for high quality social media content
       const TARGET_RESOLUTION_WIDTH = 1920; 
 
       if (aspectRatio !== "16:9") {
@@ -344,10 +343,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         else if (aspectRatio === "1:1") targetW_expr = "ih"; // Width = Height for 1:1
 
         const posFactor = (parseInt(position as any) || 50) / 100;
-        
-        // 🌟 NEW: Combined Cropping and Scaling filter chain (best practice)
-        // 1. Crop to aspect ratio (e.g., center 9:16 slice)
-        // 2. Scale up/down to TARGET_RESOLUTION_WIDTH while maintaining the new aspect ratio
+        // Combined Cropping and Scaling filter chain (best practice)
         const filterChain = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0,scale=${TARGET_RESOLUTION_WIDTH}:-2`;
 
 
@@ -358,9 +354,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "-c:v",
           "libx264",
           "-preset",
-          "ultrafast", // 🚀 Max speed preset
+          "faster", // 🌟 NEW: Faster preset for the filter-heavy crop process
           "-crf",
-          "20", // 🌟 Higher Quality Target 
+          "20", // High Quality Target 
           "-profile:v",
           "high",
           "-level",
@@ -387,7 +383,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.download(processedPath, outputFilename, () => {
         try {
-          fs.unlink(inputPath).catch(() => {}); // ✅ Clean up the fetched clip
+          fs.unlink(inputPath).catch(() => {}); // Clean up the fetched clip
           fs.unlink(processedPath).catch(() => {}); // Clean up the final clip after download
         } catch {}
       });
