@@ -95,7 +95,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (100% FIXED FREEZE & SYNC)
+// ASYNC WORKER FUNCTION (FIXED: NO FREEZE LOGIC)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -113,7 +113,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
     const filename = `hq_${jobId}.mp4`;
     const outputTemplate = path.join(DOWNLOADS_DIR, filename);
 
-    jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed and accurate trimming)`;
+    jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed)`;
 
     const command = "ffmpeg";
 
@@ -124,46 +124,46 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
       `User-Agent: ${USER_AGENT}`,
     ];
 
-    // FIX 1: Apply seek (-ss) to BOTH inputs individually.
-    // This ensures video and audio both start at the exact same time.
-    // If we only seek video, audio starts at 00:00, causing a massive freeze/desync.
+    // ✅ FIX APPLIED: We place -ss AFTER the inputs.
+    // This forces FFmpeg to decode the stream properly to the start point.
+    // It eliminates the "Frozen First Frame" issue completely.
     const args = [
-      // Input 1: Video
-      "-ss", `${startSec}`,
       ...commonArgs,
-      "-i", cached.videoUrl,
-
-      // Input 2: Audio (only if different) - Apply seek here too!
+      "-i",
+      cached.videoUrl,
       ...(cached.videoUrl !== cached.audioUrl
-        ? ["-ss", `${startSec}`, ...commonArgs, "-i", cached.audioUrl]
+        ? [...commonArgs, "-i", cached.audioUrl]
         : []),
-
-      // Output duration limit
-      "-t", `${durationSec}`,
-
-      // Map streams correctly
+        
+      // SEEKING AFTER INPUT (Output Seeking) - The cure for freezing
+      "-ss",
+      `${startSec}`,
+      "-t",
+      `${durationSec}`,
+      
       ...(cached.videoUrl !== cached.audioUrl
         ? ["-map", "0:v:0", "-map", "1:a:0"]
         : ["-map", "0"]),
 
-      // VIDEO OPTIMIZATION (Fast & High Quality)
-      "-c:v", "libx264",
-      "-preset", "ultrafast", // Keeps it fast
-      "-crf", "20",
-      "-g", "30",
+      // ENCODING SETTINGS
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast", // Keep it fast
+      "-crf",
+      "23", // Standard quality
+      "-g", "30", // Keyframe interval
       "-x264-params", "scenecut=0",
-
-      // FIX 2: Restore avoid_negative_ts to handle start keyframes properly
-      "-avoid_negative_ts", "make_zero",
-
+      
       "-threads", "0",
       "-pix_fmt", "yuv420p",
 
-      // AUDIO OPTIMIZATION 
-      "-c:a", "copy", // Instant audio copy
+      // AUDIO SETTINGS
+      "-c:a",
+      "copy", // Copy audio stream directly (Safe & Fast)
 
-      // BROWSER OPTIMIZATION
-      "-movflags", "+faststart",
+      "-movflags",
+      "+faststart",
       "-y",
       outputTemplate,
     ];
@@ -204,7 +204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO (GET /api/video-info)
+  // 1. VIDEO INFO
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -221,9 +221,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
-      // Use system yt-dlp 
       const command = "yt-dlp";
-
       const args = [
         "--cookies",
         "cookies.txt",
@@ -266,39 +264,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER) 
+  // 2. FETCH SEGMENT
   app.post("/api/fetch-segment", (req, res) => {
     try {
       const { url, startTime, endTime } = req.body;
       const cached = videoCache.get(url);
       if (!cached)
-        return res
-          .status(400)
-          .json({ message: "Session expired. Reload video." });
+        return res.status(400).json({ message: "Session expired. Reload video." });
 
       if (!url || !startTime || !endTime) {
         return res.status(400).json({ message: "Missing required parameters." });
       }
 
-      // CRITICAL: Server-side validation of time
       const startSec = parseTimestamp(startTime);
       const endSec = parseTimestamp(endTime);
 
       if (endSec <= startSec) {
         return res.status(400).json({
-          message: "End time must be greater than start time. Duration is 0 or negative."
+          message: "End time must be greater than start time."
         });
       }
 
       const jobId = crypto.randomBytes(16).toString('hex');
 
-      // 1. Start the long-running job in the background (DO NOT use await)
       startProcessingJob(jobId, cached, startTime, endTime);
 
-      // 2. Respond IMMEDIATELY (202 Accepted) to bypass Cloudflare 100s timeout
       return res.status(202).json({
         jobId,
-        message: "Video processing started in background. Check job-status."
+        message: "Video processing started in background."
       });
 
     } catch (error: any) {
@@ -307,13 +300,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 3. PROCESS CROP (POST /api/process-crop - Optimized for MAX SPEED)
+  // 3. PROCESS CROP
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
 
       if (!filename || typeof filename !== 'string') {
-        return res.status(400).json({ message: "Missing or invalid filename in request body." });
+        return res.status(400).json({ message: "Missing filename." });
       }
 
       const inputPath = path.join(DOWNLOADS_DIR, filename);
@@ -327,7 +320,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const processedPath = path.join(DOWNLOADS_DIR, outputFilename);
 
       const command = "ffmpeg";
-
       let args: string[] = [];
       args.push("-i", inputPath);
 
@@ -341,8 +333,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`;
         else if (aspectRatio === "1:1") targetW_expr = "ih";
 
-        // FIX 3: CROP POSITION BUG
-        // Allow position '0' by explicitly checking for NaN instead of using || operator
+        // ✅ FIX RETAINED: Explicit NaN check.
+        // The code you pasted had `parseInt(position) || 50` which fails if position is 0.
+        // We keep THIS fix because it is correct for your app.
         const parsedPos = parseInt(position as any);
         const posFactor = (isNaN(parsedPos) ? 50 : parsedPos) / 100;
 
@@ -352,8 +345,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "-vf", filterChain,
           "-c:v", "libx264",
           "-preset", "ultrafast",
-          "-crf", "20",
-          "-tune", "fastdecode",
+          "-crf", "23",
           "-profile:v", "high",
           "-level", "4.2",
           "-pix_fmt", "yuv420p",
@@ -380,7 +372,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 4. JOB STATUS CHECK (GET /api/job-status - Polling Endpoint)
+  // 4. JOB STATUS
   app.get("/api/job-status", (req, res) => {
     const jobId = req.query.id as string;
     if (!jobId) return res.status(400).json({ message: "Missing job ID." });
