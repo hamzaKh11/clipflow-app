@@ -95,7 +95,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (FIXED FREEZE LOGIC)
+// ASYNC WORKER FUNCTION (100% FIXED FREEZE & SYNC)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -124,50 +124,46 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
       `User-Agent: ${USER_AGENT}`,
     ];
 
-    // FIX 1: Video Freeze & Sync Fix
-    // We use fast seek (-ss before -i) but MUST use -avoid_negative_ts make_zero
-    // to ensure the output video timestamps start at 0.00 correctly.
+    // FIX 1: Apply seek (-ss) to BOTH inputs individually.
+    // This ensures video and audio both start at the exact same time.
+    // If we only seek video, audio starts at 00:00, causing a massive freeze/desync.
     const args = [
-      "-ss",
-      `${startSec}`,
-      
+      // Input 1: Video
+      "-ss", `${startSec}`,
       ...commonArgs,
-      "-i",
-      cached.videoUrl,
-      ...(cached.videoUrl !== cached.audioUrl
-        ? [...commonArgs, "-i", cached.audioUrl]
-        : []),
-        
-      "-t",
-      `${durationSec}`,
+      "-i", cached.videoUrl,
 
+      // Input 2: Audio (only if different) - Apply seek here too!
+      ...(cached.videoUrl !== cached.audioUrl
+        ? ["-ss", `${startSec}`, ...commonArgs, "-i", cached.audioUrl]
+        : []),
+
+      // Output duration limit
+      "-t", `${durationSec}`,
+
+      // Map streams correctly
       ...(cached.videoUrl !== cached.audioUrl
         ? ["-map", "0:v:0", "-map", "1:a:0"]
         : ["-map", "0"]),
 
-      // VIDEO SPEED & QUALITY OPTIMIZATION 
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast",
-      "-crf",
-      "20",
+      // VIDEO OPTIMIZATION (Fast & High Quality)
+      "-c:v", "libx264",
+      "-preset", "ultrafast", // Keeps it fast
+      "-crf", "20",
       "-g", "30",
       "-x264-params", "scenecut=0",
-      
-      // CRITICAL FLAG RESTORED: prevents the 7s freeze
+
+      // FIX 2: Restore avoid_negative_ts to handle start keyframes properly
       "-avoid_negative_ts", "make_zero",
-      
+
       "-threads", "0",
       "-pix_fmt", "yuv420p",
 
       // AUDIO OPTIMIZATION 
-      "-c:a",
-      "copy", // Instant and 100% quality audio copy
+      "-c:a", "copy", // Instant audio copy
 
       // BROWSER OPTIMIZATION
-      "-movflags",
-      "+faststart",
+      "-movflags", "+faststart",
       "-y",
       outputTemplate,
     ];
@@ -322,7 +318,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const inputPath = path.join(DOWNLOADS_DIR, filename);
 
-      // Source File Not Found Error (404) fix is preserved
       if (!existsSync(inputPath))
         return res.status(404).json({
           message: "Source file not found. Try fetching the clip again.",
@@ -342,51 +337,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const TARGET_RESOLUTION_WIDTH = 1920;
 
       if (aspectRatio !== "16:9") {
-        // Cropped Output 
         let targetW_expr = "";
         if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`;
         else if (aspectRatio === "1:1") targetW_expr = "ih";
 
-        // FIX 2: CROP POSITION BUG
-        // Previous code: (parseInt(position) || 50) treated position "0" (max left) as false/null and defaulted to 50.
-        // New code: Explicitly checks for NaN, allowing 0 to be a valid position.
+        // FIX 3: CROP POSITION BUG
+        // Allow position '0' by explicitly checking for NaN instead of using || operator
         const parsedPos = parseInt(position as any);
         const posFactor = (isNaN(parsedPos) ? 50 : parsedPos) / 100;
 
-        // Combined Cropping and Scaling filter chain
         const filterChain = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0,scale=${TARGET_RESOLUTION_WIDTH}:-2`;
 
         args.push(
-          "-vf",
-          filterChain,
-          // Encoding parameters
-          "-c:v",
-          "libx264",
-          // Max speed combination
-          "-preset",
-          "ultrafast",
-          "-crf",
-          "20",
-          "-tune",
-          "fastdecode",
-          "-profile:v",
-          "high",
-          "-level",
-          "4.2",
-          "-pix_fmt",
-          "yuv420p",
-          "-threads",
-          "0",
-          "-movflags",
-          "+faststart",
-          // Keep audio pristine
-          "-c:a",
-          "copy",
-          "-y",
-          processedPath
+          "-vf", filterChain,
+          "-c:v", "libx264",
+          "-preset", "ultrafast",
+          "-crf", "20",
+          "-tune", "fastdecode",
+          "-profile:v", "high",
+          "-level", "4.2",
+          "-pix_fmt", "yuv420p",
+          "-threads", "0",
+          "-movflags", "+faststart",
+          "-c:a", "copy",
+          "-y", processedPath
         );
       } else {
-        // 16:9 Output - Just copy streams (instant)
         args.push("-c", "copy", "-movflags", "+faststart", "-y", processedPath);
       }
 
@@ -395,7 +371,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.download(processedPath, outputFilename, () => {
         try {
-          // Only delete the final, processed clip after download
           fs.unlink(processedPath).catch(() => { });
         } catch { }
       });
@@ -405,24 +380,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-
   // 4. JOB STATUS CHECK (GET /api/job-status - Polling Endpoint)
   app.get("/api/job-status", (req, res) => {
     const jobId = req.query.id as string;
-
-    if (!jobId) {
-      return res.status(400).json({ message: "Missing job ID." });
-    }
-
+    if (!jobId) return res.status(400).json({ message: "Missing job ID." });
     const job = jobs[jobId];
-
-    if (!job) {
-      return res.status(404).json({ message: "Job not found or expired." });
-    }
-
+    if (!job) return res.status(404).json({ message: "Job not found or expired." });
     return res.json(job);
   });
-
 
   const httpServer = createServer(app);
   return httpServer;
