@@ -5,7 +5,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { existsSync } from "fs";
 import express from "express";
-import crypto from "crypto"; // ✅ NEW: Import for unique job IDs
+import crypto from "crypto"; // NEW: Import for unique job IDs
 
 const isWindows = process.platform === "win32";
 // Updated User Agent to mimic a real browser
@@ -13,7 +13,7 @@ const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // ----------------------------------------------------------------------
-// ✅ NEW: ASYNC JOB MANAGEMENT STORE
+// ASYNC JOB MANAGEMENT STORE
 // ----------------------------------------------------------------------
 
 type JobStatus = {
@@ -97,7 +97,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ✅ NEW: ASYNC WORKER FUNCTION (Contains all the long-running logic)
+// ASYNC WORKER FUNCTION (Contains all the long-running logic)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -111,7 +111,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
         const filename = `hq_${jobId}.mp4`; // Use jobId for unique filename
         const outputTemplate = path.join(DOWNLOADS_DIR, filename);
 
-        jobs[jobId].message = `Downloading ${durationSec}s clip...`;
+        jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed)`;
 
         // Use system ffmpeg
         const command = "ffmpeg";
@@ -123,7 +123,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (Copied from original fetch-segment)
+        // Complete FFmpeg Arguments (Now optimized for SPEED and QUALITY)
         const args = [
             ...commonArgs,
             "-i",
@@ -138,30 +138,27 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             ...(cached.videoUrl !== cached.audioUrl
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
+                
+            // ✅ SPEED & QUALITY OPTIMIZATION START
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast", // 🚀 Max speed preset
             "-crf",
-            "20",
-            "-g",
-            "30",
-            "-x264-params",
-            "scenecut=0",
-            "-threads",
-            "0",
-            "-pix_fmt",
-            "yuv420p",
+            "23", // 👍 Excellent quality/speed trade-off (industry best practice)
+            // Existing video settings
+            "-g", "30",
+            "-x264-params", "scenecut=0",
+            "-threads", "0",
+            "-pix_fmt", "yuv420p",
+            
+            // ✅ AUDIO OPTIMIZATION
             "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-ar",
-            "44100",
-            "-ac",
-            "2",
+            "copy", // ⚡ Instant and 100% quality audio copy
             "-af",
-            "aresample=async=1",
+            "aresample=async=1", // Still include this for time-sync safety
+            
+            // ✅ BROWSER OPTIMIZATION
             "-movflags",
             "+faststart",
             "-y",
@@ -194,7 +191,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
 }
 
 // ----------------------------------------------------------------------
-// EXISTING ROUTE REGISTRATION
+// ROUTE REGISTRATION
 // ----------------------------------------------------------------------
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -266,7 +263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 2. FETCH SEGMENT (POST /api/fetch-segment - Now ASYNC JOB STARTER)
+  // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER)
   app.post("/api/fetch-segment", (req, res) => { // Removed 'async'
     try {
       const { url, startTime, endTime } = req.body;
@@ -301,6 +298,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
+      // FIX: Ensure filename is always a string.
+      if (!filename || typeof filename !== 'string') {
+        return res.status(400).json({ message: "Missing or invalid filename in request body." });
+      }
+      
       const inputPath = path.join(DOWNLOADS_DIR, filename);
 
       if (!existsSync(inputPath))
@@ -328,7 +330,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (aspectRatio === "9:16") targetW_expr = "ih*9/16";
         else if (aspectRatio === "1:1") targetW_expr = "ih";
 
-        const posFactor = (parseInt(position) || 50) / 100;
+        const posFactor = (parseInt(position as any) || 50) / 100;
         const cropFilter = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0`;
 
         args.push(
@@ -338,9 +340,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "-c:v",
           "libx264",
           "-preset",
-          "veryfast", // Proven best speed/quality balance (industry standard)
+          "ultrafast", // 🚀 Max speed preset
           "-crf",
-          "19", // Excellent quality range (17-20 is visually lossless)
+          "23", // 👍 Excellent quality/speed trade-off 
           "-profile:v",
           "high",
           "-level",
@@ -353,7 +355,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "+faststart",
           // Keep audio pristine
           "-c:a",
-          "copy",
+          "copy", // ⚡ Instant and 100% quality audio copy
           "-y",
           processedPath
         );
@@ -380,7 +382,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
 
-  // 4. ✅ NEW: JOB STATUS CHECK (GET /api/job-status - Polling Endpoint)
+  // 4. JOB STATUS CHECK (GET /api/job-status - Polling Endpoint)
   app.get("/api/job-status", (req, res) => {
     const jobId = req.query.id as string;
 
