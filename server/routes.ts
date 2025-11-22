@@ -5,10 +5,9 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { existsSync } from "fs";
 import express from "express";
-import crypto from "crypto"; // NEW: Import for unique job IDs
+import crypto from "crypto"; 
 
 const isWindows = process.platform === "win32";
-// Updated User Agent to mimic a real browser
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -19,11 +18,10 @@ const USER_AGENT =
 type JobStatus = {
   status: 'Processing' | 'Completed' | 'Failed';
   message: string;
-  result?: { videoUrl: string, filename: string }; // Custom result object
+  result?: { videoUrl: string, filename: string }; 
   error?: string;
 };
 
-// In-Memory Job Store (resets on pm2 restart)
 const jobs: Record<string, JobStatus> = {}; 
 
 // ----------------------------------------------------------------------
@@ -113,12 +111,11 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
              throw new Error(`Invalid duration calculated: ${durationSec} seconds.`);
         }
 
-        const filename = `hq_${jobId}.mp4`; // Use jobId for unique filename
+        const filename = `hq_${jobId}.mp4`; 
         const outputTemplate = path.join(DOWNLOADS_DIR, filename);
 
         jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed)`;
 
-        // Use system ffmpeg
         const command = "ffmpeg";
 
         const commonArgs = [
@@ -128,7 +125,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (Optimized for SPEED and Quality: ultrafast/CRF 23/Audio Copy)
+        // Complete FFmpeg Arguments (Optimized and Conflict-Free)
         const args = [
             ...commonArgs,
             "-i",
@@ -148,20 +145,18 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             "-c:v",
             "libx264",
             "-preset",
-            "ultrafast", // Max speed preset
+            "ultrafast", 
             "-crf",
-            "23", // Excellent quality/speed trade-off (industry best practice)
-            // Existing video settings
+            "23", 
             "-g", "30",
             "-x264-params", "scenecut=0",
             "-threads", "0",
             "-pix_fmt", "yuv420p",
             
-            // ✅ AUDIO OPTIMIZATION
+            // ✅ AUDIO OPTIMIZATION (FIXED)
             "-c:a",
             "copy", // Instant and 100% quality audio copy
-            "-af",
-            "aresample=async=1", // Still include this for time-sync safety
+            // ❌ Removed the conflicting filter: "-af", "aresample=async=1", 
             
             // BROWSER OPTIMIZATION
             "-movflags",
@@ -368,9 +363,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           "0", // Use all available CPU cores
           "-movflags",
           "+faststart",
-          // Keep audio pristine
+          // Keep audio pristine (FIXED)
           "-c:a",
-          "copy", // ⚡ Instant and 100% quality audio copy
+          "copy", 
           "-y",
           processedPath
         );
