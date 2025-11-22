@@ -8,7 +8,6 @@ import express from "express";
 import crypto from "crypto"; 
 
 const isWindows = process.platform === "win32";
-// Updated User Agent to mimic a real browser
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -23,7 +22,6 @@ type JobStatus = {
   error?: string;
 };
 
-// In-Memory Job Store (resets on pm2 restart)
 const jobs: Record<string, JobStatus> = {}; 
 
 // ----------------------------------------------------------------------
@@ -127,7 +125,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
             `User-Agent: ${USER_AGENT}`,
         ];
 
-        // Complete FFmpeg Arguments (CRF 20 for Higher Quality with 'veryfast' preset for better efficiency)
+        // Complete FFmpeg Arguments (Reverted to ultrafast for speed, but high CRF for quality)
         const args = [
             ...commonArgs,
             "-i",
@@ -143,13 +141,13 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
                 ? ["-map", "0:v:0", "-map", "1:a:0"]
                 : ["-map", "0"]),
                 
-            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION (CRF 20 + veryfast)
+            // ✅ VIDEO SPEED & QUALITY OPTIMIZATION
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast", // 🌟 Optimized preset for better compression efficiency
+            "ultrafast", // 🚀 Max speed preset to counter 2 min duration
             "-crf",
-            "20", // Higher Quality Target 
+            "20", // High Quality Target 
             "-g", "30",
             "-x264-params", "scenecut=0",
             "-threads", "0",
@@ -202,7 +200,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.use("/downloads", express.static(DOWNLOADS_DIR));
 
-  // 1. VIDEO INFO (GET /api/video-info)
+  // 1. VIDEO INFO (GET /api/video-info) - UPDATED yt-dlp FORMAT FILTER
   app.get("/api/video-info", async (req, res) => {
     try {
       const url = req.query.url as string;
@@ -231,7 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         "%(title)s|||%(thumbnail)s|||%(duration)s|||%(uploader)s",
         "--get-url",
         "-f",
-        "bestvideo+bestaudio/best",
+        "bestvideo[height>=1080]+bestaudio/best", // 🌟 Get 1080p or higher video and best audio
         "--no-playlist",
         "--no-warnings",
         url,
@@ -265,7 +263,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // 2. FETCH SEGMENT (POST /api/fetch-segment - ASYNC JOB STARTER) 
-  app.post("/api/fetch-segment", (req, res) => { // Removed 'async'
+  app.post("/api/fetch-segment", (req, res) => { 
     try {
       const { url, startTime, endTime } = req.body;
       const cached = videoCache.get(url);
@@ -305,7 +303,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings)
+  // 3. PROCESS CROP (POST /api/process-crop - Optimized FFmpeg settings) - UPDATED SCALE
   app.post("/api/process-crop", async (req, res) => {
     try {
       const { filename, aspectRatio, position } = req.body;
@@ -334,24 +332,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`[CROP] Processing ${aspectRatio} crop...`);
       const startProcessing = Date.now();
+      
+      // We force a high output resolution (1080p width or 4K if hardware allows, but 1080p is safer)
+      // If the input is 4K, this scale filter will preserve it at max quality.
+      const TARGET_RESOLUTION_WIDTH = 1920; 
 
       if (aspectRatio !== "16:9") {
-        // Cropped Output - Optimized for quality and speed
+        // Cropped Output 
         let targetW_expr = "";
-        if (aspectRatio === "9:16") targetW_expr = "ih*9/16";
-        else if (aspectRatio === "1:1") targetW_expr = "ih";
+        if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`; // Calculate width based on height for 9:16
+        else if (aspectRatio === "1:1") targetW_expr = "ih"; // Width = Height for 1:1
 
         const posFactor = (parseInt(position as any) || 50) / 100;
-        const cropFilter = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0`;
+        
+        // 🌟 NEW: Combined Cropping and Scaling filter chain (best practice)
+        // 1. Crop to aspect ratio (e.g., center 9:16 slice)
+        // 2. Scale up/down to TARGET_RESOLUTION_WIDTH while maintaining the new aspect ratio
+        const filterChain = `crop=w=${targetW_expr}:h=ih:x=(iw-ow)*${posFactor}:y=0,scale=${TARGET_RESOLUTION_WIDTH}:-2`;
+
 
         args.push(
           "-vf",
-          cropFilter,
+          filterChain, // Apply the combined crop and scale filter
           // Industry-standard encoding for social media
           "-c:v",
           "libx264",
           "-preset",
-          "veryfast", // 🌟 Optimized preset
+          "ultrafast", // 🚀 Max speed preset
           "-crf",
           "20", // 🌟 Higher Quality Target 
           "-profile:v",
@@ -380,7 +387,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.download(processedPath, outputFilename, () => {
         try {
-          fs.unlink(processedPath).catch(() => {});
+          fs.unlink(inputPath).catch(() => {}); // ✅ Clean up the fetched clip
+          fs.unlink(processedPath).catch(() => {}); // Clean up the final clip after download
         } catch {}
       });
     } catch (error: any) {
