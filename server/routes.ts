@@ -95,7 +95,7 @@ interface VideoCache {
 const videoCache = new Map<string, VideoCache>();
 
 // ----------------------------------------------------------------------
-// ASYNC WORKER FUNCTION (FIXED: NO FREEZE LOGIC)
+// ASYNC WORKER FUNCTION (OPTIMIZED: FAST SEEK + SYNC FIX)
 // ----------------------------------------------------------------------
 
 async function startProcessingJob(jobId: string, cached: VideoCache, startTime: string, endTime: string) {
@@ -113,7 +113,7 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
     const filename = `hq_${jobId}.mp4`;
     const outputTemplate = path.join(DOWNLOADS_DIR, filename);
 
-    jobs[jobId].message = `Downloading ${durationSec}s clip... (Optimizing for speed)`;
+    jobs[jobId].message = `Downloading ${durationSec}s clip... (High Speed Optimization)`;
 
     const command = "ffmpeg";
 
@@ -124,46 +124,46 @@ async function startProcessingJob(jobId: string, cached: VideoCache, startTime: 
       `User-Agent: ${USER_AGENT}`,
     ];
 
-    // ✅ FIX APPLIED: We place -ss AFTER the inputs.
-    // This forces FFmpeg to decode the stream properly to the start point.
-    // It eliminates the "Frozen First Frame" issue completely.
+    // ✅ FULL FIX:
+    // 1. Use "-ss" BEFORE input (-i) for instant seek (no waiting for download).
+    // 2. Apply "-ss" to BOTH video and audio inputs individually to prevent sync freeze.
     const args = [
+      // --- INPUT 1: VIDEO ---
+      "-ss", `${startSec}`, // Seek BEFORE input (Fast)
       ...commonArgs,
-      "-i",
-      cached.videoUrl,
+      "-i", cached.videoUrl,
+
+      // --- INPUT 2: AUDIO (If separate) ---
+      // We must seek the audio too, otherwise it starts at 0:00 and desyncs!
       ...(cached.videoUrl !== cached.audioUrl
-        ? [...commonArgs, "-i", cached.audioUrl]
+        ? ["-ss", `${startSec}`, ...commonArgs, "-i", cached.audioUrl]
         : []),
         
-      // SEEKING AFTER INPUT (Output Seeking) - The cure for freezing
-      "-ss",
-      `${startSec}`,
-      "-t",
-      `${durationSec}`,
+      // Duration Limit
+      "-t", `${durationSec}`,
       
+      // Mapping
       ...(cached.videoUrl !== cached.audioUrl
         ? ["-map", "0:v:0", "-map", "1:a:0"]
         : ["-map", "0"]),
 
-      // ENCODING SETTINGS
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast", // Keep it fast
-      "-crf",
-      "23", // Standard quality
-      "-g", "30", // Keyframe interval
+      // ENCODING (High Speed)
+      "-c:v", "libx264",
+      "-preset", "ultrafast", 
+      "-crf", "23", 
+      "-g", "30",
       "-x264-params", "scenecut=0",
+      
+      // Critical for preventing negative timestamp issues after fast seek
+      "-avoid_negative_ts", "make_zero",
       
       "-threads", "0",
       "-pix_fmt", "yuv420p",
 
-      // AUDIO SETTINGS
-      "-c:a",
-      "copy", // Copy audio stream directly (Safe & Fast)
+      // AUDIO 
+      "-c:a", "copy", // Copy is fastest and best quality
 
-      "-movflags",
-      "+faststart",
+      "-movflags", "+faststart",
       "-y",
       outputTemplate,
     ];
@@ -333,9 +333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (aspectRatio === "9:16") targetW_expr = `(ih*9/16)`;
         else if (aspectRatio === "1:1") targetW_expr = "ih";
 
-        // ✅ FIX RETAINED: Explicit NaN check.
-        // The code you pasted had `parseInt(position) || 50` which fails if position is 0.
-        // We keep THIS fix because it is correct for your app.
+        // ✅ FIX RETAINED: Explicit NaN check allows position 0 (max left) to work.
         const parsedPos = parseInt(position as any);
         const posFactor = (isNaN(parsedPos) ? 50 : parsedPos) / 100;
 
@@ -383,4 +381,4 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   const httpServer = createServer(app);
   return httpServer;
-} 
+}
