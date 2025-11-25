@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Sitemap: https://myclipflow.com/sitemap.xml
+
+User-agent: Googlebot-Image
+Allow: /
+Allow: /*.jpg
+Allow: /*.png
+Allow: /*.ico
